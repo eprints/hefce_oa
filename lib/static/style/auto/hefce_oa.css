@@ -4,6 +4,11 @@ li.hoa_compliant
 	list-style-image: url(/style/images/hoa_message-icon.png);
 }
 
+li.audit_test.hoa_compliant
+{
+	list-style-image: none;
+}
+
 li.hoa_non_compliant
 {
 	list-style-image: url(/style/images/warning-icon.png);
@@ -23,6 +28,13 @@ span.hoa_compliant
 	padding-left: 18px;
 	background: url('/style/images/hoa_message-icon.png') no-repeat;
 }
+
+span.hoa_audit.hoa_compliant
+{
+    padding-left: 0px;
+	background: none;
+}
+
 span.hoa_non_compliant
 {
 	padding-left: 18px;
@@ -33,7 +45,7 @@ span.hoa_future_compliant
 	padding-left: 18px;
 	background: url('/style/images/hoa_future_compliant-icon.png') no-repeat;
 }
-span.hoa_out_of_scope_timing, span.hoa_out_of_scope_gold, span.hoa_out_of_scope_issn
+span.hoa_out_of_scope_timing, span.hoa_out_of_scope_gold, span.hoa_out_of_scope_issn, span.hoa_out_of_scope_over
 {
 	padding-left: 18px;
 	background: url('/style/images/hoa_out_of_scope-icon.png') no-repeat;
@@ -82,4 +94,29 @@ div.hoa_help
 a.hoa_show_description
 {
 	cursor:pointer;	
+}
+
+.hoa_data_tables > div
+{
+    display: inline-block;
+    width: 50%;
+    box-sizing: border-box;
+    padding: 5px; 
+    vertical-align: top;
+}
+
+.hoa_data_compliance{
+    border-right: dashed #bbf 1px;
+}
+
+.hoa_data_tables .hoa_data_header{
+    font-size: 1.1rem;
+}
+
+.hoa_data_tables .hoa_data_audit table{
+    margin-bottom: 15px;
+}
+
+.hoa_data_tables td ul{
+    margin-bottom: 0;
 }

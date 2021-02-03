@@ -1,0 +1,191 @@
+#!/usr/bin/perl -w
+
+use FindBin;
+use lib "$FindBin::Bin/../../../perl_lib";
+
+
+=head1 NAME
+
+
+=head1 SYNOPSIS
+
+=head1 DESCRIPTION
+
+
+=cut
+
+use EPrints;
+use JSON;
+use Data::Dumper;
+use DateTime::Format::Epoch;
+
+use strict;
+use warnings;
+
+my $repositoryid = $ARGV[0];
+#### Repo stuff ####
+my $ep = EPrints->new();
+my $repo = $ep->repository($repositoryid);
+unless($repo) {die("could not find repository with id: $repositoryid");}
+
+my $eprintid = $ARGV[1];
+my $eprints = [];
+if(defined $eprintid){
+    print "Get core data for eprint/$eprintid...\n";
+    $eprints = [$eprintid];
+}else{
+    print "Get core data for all REF eligible records...\n";
+    if($repo->can_call("hefce_oa", "get_eligible_eprints")){
+        $eprints = $repo->call(["hefce_oa", "get_eligible_eprints"],$repo);
+    }
+}
+
+if($repo->can_call("hefce_oa", "get_core")){
+    for my $eprintid(@{$eprints}){
+
+        if( !defined($eprintid) ){
+            _fatal($repo,,"get_core called without id argument");
+        }elsif( $eprintid !~ /^([0-9]+)$/ ){
+            _fatal($repo, "get_core requires numeric eprintid argument");
+        }
+
+		my $eprint = $repo->dataset( "eprint" )->dataobj( $eprintid );
+        _fatal($repo, "No eprint found with supplied parameters") if (!EPrints::Utils::is_set($eprint));
+
+        my ($status, $response, $details) = $repo->call(["hefce_oa", "get_core"],$repo, $eprint);
+        _fatal($repo, $response, $details) if($status eq "ERROR");
+        _process($repo, $response, $eprint) if($status eq "SUCCESS");
+    }
+
+}else{
+    _fatal($repo, "The REF CC audit check-up does not appear ot be properly installed");
+}
+
+
+sub _fatal {
+    my ($repo, $msg, $response) = @_;
+
+    my $json = JSON->new->allow_nonref;
+ 
+    if(!defined $response){
+        $repo->log($msg);
+        print $json->encode( {error=> $msg} ) . "\n";
+    }else{
+        $repo->log($msg." ".$response->content);
+        print $json->encode( {error=> $msg, status_line=> $response->status_line, code => $response->code, response => $json->utf8->decode($response->content)} );
+    }
+    #exit
+}
+
+sub _process {
+    my ($repo, $response,$eprint) = @_;
+
+    my $json = JSON->new->allow_nonref;
+    if( ! $response->is_success ){
+        _fatal($repo, "Error from core", $response);
+    }else{
+
+
+        # We have some data, but before we can use it we need an audit record
+        my $audit_ds = $repo->dataset( "hefce_oa_audit" );
+        my $audit = $audit_ds->dataobj_class->get_audit_record( $repo, $eprint );
+        if( !defined $audit ) 
+        {
+            # we need to create a new audit record
+            $audit = $audit_ds->create_dataobj(
+                {
+                    eprintid => $eprint->id
+                }
+            );
+        }
+
+        my $core_data =  $json->utf8->decode( $response->content );
+        my $ep_oai_id = EPrints::OpenArchives::to_oai_identifier( EPrints::OpenArchives::archive_id( $repo ), $eprint->get_id );
+        
+        print "Hits: ".$core_data->{totalHits}."\n";
+
+        my $dt = DateTime->new( year => 1970, month => 1, day => 1 );
+        my $formatter = DateTime::Format::Epoch->new(
+                    epoch          => $dt,
+                    unit           => 'milliseconds',
+                    type           => 'int',    # or 'float', 'bigint'
+                    skip_leap_seconds => 1,
+                    start_at       => 0,
+                    local_epoch    => undef,
+                ); 
+
+        # We have NO IDEA which of these "hits" will be used by any RE audit of this data...
+        my @core_sources;
+        for my $core_hit (@{$core_data->{data}}){
+
+            my $core_source = {};
+    
+            my $s = $core_hit->{_source};
+
+            print "\n### ".$s->{repositories}->[0]->{name}." ###\n\n";
+            print "core id => ".$s->{id}."\n";
+            $core_source->{core_id} = $s->{id};
+            $core_source->{repo_name} = $s->{repositories}->[0]->{name};
+
+            if(defined $s->{datePublished}){
+                print "core datePublished => ".$s->{datePublished}."\n";
+                $core_source->{datePublished} = $s->{datePublished};
+            }else{
+                print "core datePublished not set \n";
+            }
+            print "eprint datePublished => ".$eprint->value("date")."\n";
+
+            # get the latest depositedDate value
+            my $dd = _get_latest_date( $s, "depositedDate" );
+            
+            # need to check the repositoryDocument too for a depositedDate
+            if(defined $s->{repositoryDocument} && $dd < $s->{repositoryDocument}->{depositedDate}){ # repository document deposit date is later than the deposit date
+                $dd = $s->{repositoryDocument}->{depositedDate};
+            }
+            if( defined $dd ){
+                $dd = $formatter->parse_datetime( $dd );
+                $core_source->{depositedDate} = $dd->ymd;
+            }
+
+            # get the latest publishedDate
+            my $pd = _get_latest_date( $s, "publishedDate" );
+            if( defined $pd ){
+                $pd = $formatter->parse_datetime( $pd );
+                $core_source->{publishedDate} = $pd->ymd;
+            }
+
+            # get the latest acceptedDate
+            my $ad = _get_latest_date( $s, "acceptedDate" );
+            if( defined $ad ){
+                $ad = $formatter->parse_datetime( $ad );
+                $core_source->{acceptedDate} = $ad->ymd;
+            }
+
+            print "core depositedDate => ".$dd->ymd."\n" if defined $dd;
+            print "eprint deposit date (datestamp) => ".$eprint->value("datestamp")."\n";
+            print "eprint FCD => ".$eprint->value("hoa_date_fcd")."\n" if($eprint->exists_and_set("hoa_date_fcd"));
+
+            push @core_sources, $core_source;
+        }
+
+        $audit->set_value( "core_sources", \@core_sources );
+
+        # now we have updated the core audit record, set the timestamp
+        $audit->set_value( "core_datestamp", EPrints::Time::get_iso_timestamp() );
+        $audit->commit;
+    }
+}
+
+# gets the latest version of the given date either directly from the source or from the corssref document
+sub _get_latest_date{
+    my ($s, $date) = @_;
+
+    # date shows up directly in the _source
+    my $dd = $s->{$date};
+    
+    # and potentially again in the crossrefDocument
+    if(defined $s->{crossrefDocument} && defined $s->{crossrefDocument}->{$date} && $s->{$date} < $s->{crossrefDocument}->{$date}){ # crossref document date is later than the date
+        $dd = $s->{crossrefDocument}->{$date};
+    }
+    return $dd;
+}
